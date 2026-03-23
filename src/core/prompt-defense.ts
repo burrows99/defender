@@ -5,7 +5,6 @@
  * Provides a simple API for defending tool results against prompt injection.
  */
 
-import type { MLPWeights } from "../classifiers/mlp";
 import { createPatternDetector, type PatternDetector } from "../classifiers/pattern-detector";
 import {
 	createTier2Classifier,
@@ -104,8 +103,6 @@ export interface PromptDefenseOptions {
 	enableTier2?: boolean;
 	/** Tier 2 classifier configuration */
 	tier2Config?: Partial<Tier2ClassifierConfig>;
-	/** MLP weights for Tier 2 (load at construction or later via loadTier2Weights) */
-	tier2Weights?: MLPWeights;
 	/** Block high/critical risk content */
 	blockHighRisk?: boolean;
 	/** Default risk level for unclassified content */
@@ -164,9 +161,6 @@ export class PromptDefense {
 			toolRules: options.config?.toolRules ?? (options.useDefaultToolRules === true ? this.config.toolRules : []),
 			defaultRiskLevel: options.defaultRiskLevel ?? "medium",
 			useTier1Classification: options.enableTier1 ?? true,
-			useTier2Classification: false,
-			tier2Config: options.tier2Config,
-			tier2Weights: options.tier2Weights,
 			blockHighRisk: options.blockHighRisk ?? false,
 			cumulativeRiskThresholds: this.config.cumulativeRiskThresholds,
 		});
@@ -176,32 +170,14 @@ export class PromptDefense {
 		// Initialize Tier 2 classifier if enabled
 		if (options.enableTier2 ?? true) {
 			this.tier2Classifier = createTier2Classifier(options.tier2Config);
-			if (options.tier2Weights) {
-				this.tier2Classifier.loadWeights(options.tier2Weights);
-			}
 		}
 	}
 
 	/**
-	 * Load MLP weights for Tier 2 classification
-	 *
-	 * Call this after construction if weights weren't provided in options.
-	 * If Tier 2 wasn't enabled at construction, this will create the classifier.
-	 *
-	 * @param weights - MLP weights exported from Python
-	 */
-	loadTier2Weights(weights: MLPWeights): void {
-		if (!this.tier2Classifier) {
-			this.tier2Classifier = createTier2Classifier();
-		}
-		this.tier2Classifier.loadWeights(weights);
-	}
-
-	/**
-	 * Pre-load the Tier 2 embedding model
+	 * Pre-load the Tier 2 ONNX model and tokenizer
 	 *
 	 * Call this at startup to avoid latency on first classification.
-	 * The embedding model download (~30MB) is cached locally.
+	 * Loads the bundled ONNX model and tokenizer into memory; no downloads are performed.
 	 */
 	async warmupTier2(): Promise<void> {
 		if (this.tier2Classifier) {
