@@ -69,6 +69,30 @@ interface OrtTensorConstructor {
 }
 
 /**
+ * Module-level session cache — shared across all OnnxClassifier instances in this process.
+ *
+ * Keyed by model path. Populated on first successful _loadModel() call and reused by every
+ * subsequent instance. Sharing InferenceSession across concurrent run() calls is safe —
+ * ONNX Runtime guarantees thread safety for concurrent Run() from v1.7.0. Sharing the
+ * tokenizer is safe — tokenize() is synchronous and never mutates the tokenizer object.
+ */
+const _sessionCache = new Map<
+	string,
+	{
+		session: OrtInferenceSession;
+		OrtTensor: OrtTensorConstructor;
+		tokenizer: Tokenizer;
+	}
+>();
+
+/**
+ * Module-level in-flight load promises — prevents duplicate concurrent loads when multiple
+ * OnnxClassifier instances target the same modelPath simultaneously (e.g. warmup + first request).
+ * Entries are removed after the load resolves or rejects.
+ */
+const _loadingPromises = new Map<string, Promise<void>>();
+
+/**
  * ONNX Classifier for fine-tuned MiniLM models
  *
  * Usage:
@@ -116,34 +140,64 @@ export class OnnxClassifier {
 			await this.loadingPromise;
 		} catch (error) {
 			this.loadingPromise = null;
+			console.warn(
+				"[defender] ONNX model failed to load:",
+				error instanceof Error ? error.message : String(error),
+			);
 			throw error;
 		}
 	}
 
 	private async _loadModel(): Promise<void> {
-		// Dynamic imports — these are optional peer dependencies
-		// eslint-disable-next-line @typescript-eslint/no-require-imports
-		const transformers = (await import("@huggingface/transformers")) as unknown as {
-			AutoTokenizer: {
-				from_pretrained: (path: string, options?: { local_files_only: boolean }) => Promise<Tokenizer>;
-			};
-		};
+		const cached = _sessionCache.get(this.modelPath);
+		if (cached) {
+			this.session = cached.session;
+			this.OrtTensor = cached.OrtTensor;
+			this.tokenizer = cached.tokenizer;
+			return;
+		}
 
-		this.tokenizer = await transformers.AutoTokenizer.from_pretrained(this.modelPath, {
-			local_files_only: true,
-		});
+		// Share a single in-flight load across concurrent instances targeting the same path
+		let inFlight = _loadingPromises.get(this.modelPath);
+		if (!inFlight) {
+			const modelPath = this.modelPath;
+			inFlight = (async () => {
+				// Dynamic imports — these are optional peer dependencies
+				// eslint-disable-next-line @typescript-eslint/no-require-imports
+				const transformers = (await import("@huggingface/transformers")) as unknown as {
+					AutoTokenizer: {
+						from_pretrained: (path: string, options?: { local_files_only: boolean }) => Promise<Tokenizer>;
+					};
+				};
+				const tokenizer = await transformers.AutoTokenizer.from_pretrained(modelPath, {
+					local_files_only: true,
+				});
 
-		// eslint-disable-next-line @typescript-eslint/no-require-imports
-		const ort = (await import("onnxruntime-node")) as unknown as {
-			InferenceSession: {
-				create: (path: string) => Promise<OrtInferenceSession>;
-			};
-			Tensor: OrtTensorConstructor;
-		};
+				// eslint-disable-next-line @typescript-eslint/no-require-imports
+				const ort = (await import("onnxruntime-node")) as unknown as {
+					InferenceSession: {
+						create: (path: string) => Promise<OrtInferenceSession>;
+					};
+					Tensor: OrtTensorConstructor;
+				};
+				const OrtTensor = ort.Tensor;
+				const onnxPath = resolve(modelPath, "model_quantized.onnx");
+				const session = await ort.InferenceSession.create(onnxPath);
 
-		this.OrtTensor = ort.Tensor;
-		const onnxPath = resolve(this.modelPath, "model_quantized.onnx");
-		this.session = await ort.InferenceSession.create(onnxPath);
+				_sessionCache.set(modelPath, { session, OrtTensor, tokenizer });
+			})();
+			_loadingPromises.set(this.modelPath, inFlight);
+			void inFlight.finally(() => _loadingPromises.delete(this.modelPath));
+		}
+
+		await inFlight;
+
+		const loaded = _sessionCache.get(this.modelPath);
+		if (loaded) {
+			this.session = loaded.session;
+			this.OrtTensor = loaded.OrtTensor;
+			this.tokenizer = loaded.tokenizer;
+		}
 	}
 
 	/**
