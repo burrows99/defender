@@ -187,7 +187,9 @@ export class OnnxClassifier {
 				_sessionCache.set(modelPath, { session, OrtTensor, tokenizer });
 			})();
 			_loadingPromises.set(this.modelPath, inFlight);
-			void inFlight.finally(() => _loadingPromises.delete(this.modelPath));
+			// Swallow .finally() rejection — the actual error propagates via `await inFlight` below.
+			// Without this, a rejected inFlight produces an unhandled rejection from the .finally() chain.
+			inFlight.finally(() => _loadingPromises.delete(this.modelPath)).catch(() => {});
 		}
 
 		await inFlight;
