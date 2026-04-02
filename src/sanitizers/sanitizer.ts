@@ -147,6 +147,8 @@ export class Sanitizer {
 
 		// Step 4: Encoding detection (high risk only)
 		// Uses deep multi-level check to catch chained encodings (e.g. base64 of hex).
+		// Risk escalation for encoded payloads (ROT13, binary, Morse) is handled
+		// upstream in ToolResultSanitizer.sanitizeStringField via containsSuspiciousEncoding.
 		if (riskLevel === "high") {
 			if (containsSuspiciousEncodingDeep(result)) {
 				result = redactAllEncoding(result, this.config.encodingRedactionText);

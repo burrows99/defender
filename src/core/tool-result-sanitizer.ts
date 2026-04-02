@@ -8,6 +8,7 @@
 
 import { createPatternDetector, type PatternDetector } from "../classifiers/pattern-detector";
 import { DEFAULT_RISKY_FIELDS, DEFAULT_TOOL_RULES, DEFAULT_TRAVERSAL_CONFIG } from "../config";
+import { containsSuspiciousEncoding } from "../sanitizers/encoding-detector";
 import { createSanitizer, type Sanitizer } from "../sanitizers/sanitizer";
 import type {
 	CumulativeRiskTracker,
@@ -423,6 +424,21 @@ export class ToolResultSanitizer {
 				// Update cumulative risk tracker
 				if (context.cumulativeRisk) {
 					this.updateCumulativeRisk(context.cumulativeRisk, riskLevel, tier1Patterns);
+				}
+			}
+		}
+
+		// Escalate risk when suspicious encoding is detected (ROT13, binary, Morse, etc.)
+		// These encodings don't trigger Tier 1 patterns (no fast-filter keywords), so
+		// without this check, risk stays at the default "medium" and encoding detection
+		// in the sanitizer (Step 4, high-risk only) never runs.
+		// Uses the shallow single-pass check (~0.05ms per field) — the deep multi-level
+		// check runs during sanitization once risk is escalated to high.
+		if (riskLevel !== "high" && riskLevel !== "critical") {
+			if (containsSuspiciousEncoding(value)) {
+				riskLevel = "high";
+				if (context.cumulativeRisk) {
+					this.updateCumulativeRisk(context.cumulativeRisk, riskLevel, []);
 				}
 			}
 		}
