@@ -597,24 +597,47 @@ function detectMorse(text: string): EncodingDetection[] {
 }
 
 /**
- * Process encoded content based on configuration action
+ * Process encoded content based on configuration action.
+ *
+ * Full-text detections (ROT13, ROT47) span position=0, length=text.length.
+ * If applied via the normal reverse-position splice loop alongside positional
+ * detections, they would overwrite the partially-decoded string using the
+ * original text length — corrupting previous replacements and causing
+ * decodeAllLevels to oscillate rather than converge.
+ *
+ * Resolution: positional detections are applied first (end-to-start splice);
+ * full-text detections are only applied when there are no positional detections
+ * to avoid interference. Only the first full-text detection is used when
+ * multiple exist (e.g. both ROT13 and ROT47 fire on the same string).
  */
 function processEncodedContent(text: string, detections: EncodingDetection[], config: EncodingDetectorConfig): string {
-	let result = text;
+	const isFullText = (d: EncodingDetection) => d.position === 0 && d.length === text.length;
 
-	// Sort detections by position in reverse order to process from end to start
-	// This preserves positions during replacement
-	const sortedDetections = [...detections].sort((a, b) => b.position - a.position);
+	const positional = detections.filter((d) => !isFullText(d));
+	const fullText = detections.filter(isFullText);
 
-	for (const detection of sortedDetections) {
-		const replacement =
-			config.action === "redact" ? config.redactReplacement : (detection.decoded ?? detection.original);
-
-		result =
-			result.slice(0, detection.position) + replacement + result.slice(detection.position + detection.length);
+	// When positional detections exist, apply them and skip full-text transforms.
+	// decodeAllLevels will pick up the full-text encoding in the next iteration
+	// once the positional content has been decoded.
+	if (positional.length > 0) {
+		let result = text;
+		const sorted = [...positional].sort((a, b) => b.position - a.position);
+		for (const detection of sorted) {
+			const replacement =
+				config.action === "redact" ? config.redactReplacement : (detection.decoded ?? detection.original);
+			result =
+				result.slice(0, detection.position) + replacement + result.slice(detection.position + detection.length);
+		}
+		return result;
 	}
 
-	return result;
+	// No positional detections — apply the first full-text detection if any.
+	if (fullText.length > 0) {
+		const detection = fullText[0];
+		return config.action === "redact" ? config.redactReplacement : (detection.decoded ?? detection.original);
+	}
+
+	return text;
 }
 
 /**

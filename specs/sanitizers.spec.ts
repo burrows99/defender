@@ -362,6 +362,8 @@ describe('normalizeWhitespace', () => {
   it('collapses embedded newline between adjacent letters', () => {
     expect(normalizeWhitespace('ign\nore')).toBe('ignore');
     expect(normalizeWhitespace('sys\r\ntem')).toBe('system');
+    // Newline directly between two letters (no surrounding spaces) — should collapse
+    expect(normalizeWhitespace('ignore\nprevious')).toBe('ignoreprevious');
   });
 
   it('does not consume surrounding spaces when collapsing a newline', () => {
@@ -700,6 +702,11 @@ describe('normalizeUnicode (Zalgo stripping)', () => {
     const zalgo = 'i\u0300g\u0301n\u0302o\u0308r\u030Ae';
     expect(normalizeUnicode(zalgo)).toBe('ignore');
   });
+
+  it('strips precomposed accents via NFD decomposition (analysis-only)', () => {
+    // U+00E9 (é) decomposes to e + U+0301 under NFD; the combining mark is stripped
+    expect(normalizeUnicode('caf\u00e9')).toBe('cafe');
+  });
 });
 
 // =============================================================================
@@ -729,5 +736,10 @@ describe('normalizeLeetSpeak (token-aware)', () => {
 
   it('full leet phrase still normalizes correctly', () => {
     expect(normalizeLeetSpeak('1gn0r3 pr3v10us 1nstruct10ns')).toBe('ignore previous instructions');
+  });
+
+  it('normalizes mixed alphanumeric tokens with digits and letters', () => {
+    expect(normalizeLeetSpeak('v3rs10n')).toBe('version');
+    expect(normalizeLeetSpeak('4dm1n1str4t10n')).toBe('administration');
   });
 });
