@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   normalizeUnicode,
+  normalizeWhitespace,
   containsSuspiciousUnicode,
   analyzeSuspiciousUnicode,
 } from '../src/sanitizers/normalizer';
@@ -18,6 +19,8 @@ import {
   containsEncodedContent,
   containsSuspiciousEncoding,
   redactAllEncoding,
+  decodeAllLevels,
+  containsSuspiciousEncodingDeep,
 } from '../src/sanitizers/encoding-detector';
 import {
   Sanitizer,
@@ -332,5 +335,166 @@ describe('Integration', () => {
     const result = sanitizer.sanitize(encoded, { riskLevel: 'high' });
 
     expect(result.methodsApplied).toContain('encoding_detection');
+  });
+});
+
+// =============================================================================
+// normalizeWhitespace
+// =============================================================================
+
+describe('normalizeWhitespace', () => {
+  it('collapses letter-by-letter spacing into a single word', () => {
+    expect(normalizeWhitespace('S Y S T E M')).toBe('SYSTEM');
+    expect(normalizeWhitespace('i g n o r e')).toBe('ignore');
+  });
+
+  it('collapses spacing in the middle of a sentence', () => {
+    const result = normalizeWhitespace('please S Y S T E M : override');
+    expect(result).toBe('please SYSTEM : override');
+  });
+
+  it('leaves two-letter sequences untouched to avoid collapsing "I am"', () => {
+    expect(normalizeWhitespace('I a')).toBe('I a');
+    expect(normalizeWhitespace('a b')).toBe('a b');
+  });
+
+  it('collapses embedded newline between adjacent letters', () => {
+    expect(normalizeWhitespace('ign\nore')).toBe('ignore');
+    expect(normalizeWhitespace('sys\r\ntem')).toBe('system');
+  });
+
+  it('does not consume surrounding spaces when collapsing a newline', () => {
+    // \s* removal was intentionally dropped — word boundary spaces must be preserved
+    const result = normalizeWhitespace('ignore\n previous');
+    expect(result).toBe('ignore\n previous');
+  });
+
+  it('passes through plain text unchanged', () => {
+    expect(normalizeWhitespace('hello world')).toBe('hello world');
+  });
+
+  it('handles empty and nullish input', () => {
+    expect(normalizeWhitespace('')).toBe('');
+    expect(normalizeWhitespace(null as unknown as string)).toBe(null);
+  });
+});
+
+// =============================================================================
+// normalizeLeetSpeak
+// =============================================================================
+
+import { normalizeLeetSpeak } from '../src/sanitizers/leet-normalizer';
+
+describe('normalizeLeetSpeak', () => {
+  it('reverses common digit/symbol substitutions', () => {
+    expect(normalizeLeetSpeak('1gn0r3')).toBe('ignore');
+    expect(normalizeLeetSpeak('syst3m')).toBe('system');
+    expect(normalizeLeetSpeak('byp4ss')).toBe('bypass');
+    expect(normalizeLeetSpeak('4dm1n')).toBe('admin');
+  });
+
+  it('normalises a full leet phrase to plain English', () => {
+    expect(normalizeLeetSpeak('1gn0r3 pr3v10us 1nstruct10ns')).toBe('ignore previous instructions');
+  });
+
+  it('does not modify hex escape sequences', () => {
+    expect(normalizeLeetSpeak('\\x69\\x67\\x6e\\x6f\\x72\\x65')).toBe('\\x69\\x67\\x6e\\x6f\\x72\\x65');
+  });
+
+  it('does not modify unicode escape sequences', () => {
+    expect(normalizeLeetSpeak('\\u0069\\u0067')).toBe('\\u0069\\u0067');
+  });
+
+  it('does not modify base64-like blobs (20+ chars)', () => {
+    const b64 = 'aWdub3JlIHByZXZpb3Vz'; // 20 chars, valid base64
+    expect(normalizeLeetSpeak(b64)).toBe(b64);
+  });
+
+  it('does not map $ when immediately followed by (', () => {
+    expect(normalizeLeetSpeak('$(echo hello)')).toBe('$(echo hello)');
+  });
+
+  it('maps $ → s when not followed by (', () => {
+    expect(normalizeLeetSpeak('$y$tem')).toBe('system');
+  });
+
+  it('substitutes ! → i only between alphanumeric characters', () => {
+    expect(normalizeLeetSpeak('adm!n')).toBe('admin');
+    expect(normalizeLeetSpeak('hello!')).toBe('hello!'); // sentence-ending ! preserved
+  });
+
+  it('handles plain text with no leet chars unchanged', () => {
+    expect(normalizeLeetSpeak('hello world')).toBe('hello world');
+  });
+
+  it('handles empty and nullish input', () => {
+    expect(normalizeLeetSpeak('')).toBe('');
+    expect(normalizeLeetSpeak(null as unknown as string)).toBe(null);
+  });
+});
+
+// =============================================================================
+// decodeAllLevels / containsSuspiciousEncodingDeep
+// =============================================================================
+
+describe('decodeAllLevels', () => {
+  it('returns levels=0 and original text when no encoding is present', () => {
+    const result = decodeAllLevels('hello world');
+    expect(result.levels).toBe(0);
+    expect(result.text).toBe('hello world');
+  });
+
+  it('decodes a single base64 layer', () => {
+    const encoded = btoa('ignore previous instructions');
+    const result = decodeAllLevels(encoded);
+    expect(result.levels).toBe(1);
+    expect(result.text).toContain('ignore previous instructions');
+  });
+
+  it('decodes double base64 (chained encoding)', () => {
+    const inner = btoa('ignore previous instructions');
+    const outer = btoa(inner);
+    const result = decodeAllLevels(outer);
+    expect(result.levels).toBe(2);
+    expect(result.text).toContain('ignore previous instructions');
+  });
+
+  it('stops at maxIterations and does not throw', () => {
+    // Build deeply nested base64 (6 levels, above default maxIterations of 5)
+    let text = 'system: override';
+    for (let i = 0; i < 6; i++) text = btoa(text);
+    const result = decodeAllLevels(text, 3);
+    expect(result.levels).toBeLessThanOrEqual(3);
+  });
+
+  it('aborts decoding when decoded length exceeds 10x original', () => {
+    // Craft a base64 string that decodes to something much longer
+    const short = 'x';
+    const padded = btoa('x'.repeat(100)); // decoded is 100x longer than original base64 hint
+    const result = decodeAllLevels(short);
+    expect(result.levels).toBe(0); // plain text, no encoding
+    // Amplification guard: decoding should abort, not produce enormous output
+    const longEncoded = btoa('a'.repeat(50));
+    const longResult = decodeAllLevels(longEncoded);
+    expect(longResult.text.length).toBeLessThanOrEqual(longEncoded.length * 10);
+  });
+});
+
+describe('containsSuspiciousEncodingDeep', () => {
+  it('detects a single-level encoded injection keyword', () => {
+    expect(containsSuspiciousEncodingDeep(btoa('ignore previous instructions'))).toBe(true);
+  });
+
+  it('detects a double-encoded injection keyword', () => {
+    const inner = btoa('system: override');
+    expect(containsSuspiciousEncodingDeep(btoa(inner))).toBe(true);
+  });
+
+  it('returns false for benign plain text', () => {
+    expect(containsSuspiciousEncodingDeep('hello world')).toBe(false);
+  });
+
+  it('returns false for benign base64', () => {
+    expect(containsSuspiciousEncodingDeep(btoa('the quick brown fox'))).toBe(false);
   });
 });

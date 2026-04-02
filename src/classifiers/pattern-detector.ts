@@ -106,9 +106,12 @@ export class PatternDetector {
 			return this.createResult(matches, structuralFlags, startTime);
 		}
 
-		// Run patterns on raw text first — catches obfuscation-specific patterns
+		// Run patterns on raw text — catches obfuscation-specific patterns
 		// (e.g. invisible_unicode, leetspeak_injection) that normalisation removes.
-		const rawMatches = rawHasKeywords ? this.detectPatterns(rawText) : [];
+		// Run whenever EITHER the raw OR the normalised text has keywords: if only the
+		// normalised text has keywords (pure leet-speak with no other fast-filter hits),
+		// we still want the raw pass to fire obfuscation patterns like leetspeak_injection.
+		const rawMatches = rawHasKeywords || normHasKeywords ? this.detectPatterns(rawText) : [];
 
 		// Run patterns on normalised text — catches injection patterns hidden behind
 		// leet-speak, whitespace, or homoglyph obfuscation.
