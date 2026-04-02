@@ -7,7 +7,7 @@
 
 import type { DataBoundary, FieldSanitizationResult, RiskLevel, SanitizationMethod } from "../types";
 import { generateDataBoundary, wrapWithBoundary } from "../utils/boundary";
-import { containsSuspiciousEncoding, redactAllEncoding } from "./encoding-detector";
+import { containsSuspiciousEncoding, containsSuspiciousEncodingDeep, redactAllEncoding } from "./encoding-detector";
 import { containsSuspiciousUnicode, normalizeUnicode } from "./normalizer";
 import { removePatterns } from "./pattern-remover";
 import { containsRoleMarkers, stripRoleMarkers } from "./role-stripper";
@@ -146,8 +146,9 @@ export class Sanitizer {
 		}
 
 		// Step 4: Encoding detection (high risk only)
+		// Uses deep multi-level check to catch chained encodings (e.g. base64 of hex).
 		if (riskLevel === "high") {
-			if (containsSuspiciousEncoding(result)) {
+			if (containsSuspiciousEncodingDeep(result)) {
 				result = redactAllEncoding(result, this.config.encodingRedactionText);
 				methodsApplied.push("encoding_detection");
 			}

@@ -317,6 +317,62 @@ export function decodeAllEncoding(text: string): string {
 }
 
 /**
+ * Decode all encoding levels in text, iterating until the output stabilises.
+ *
+ * A single call to `decodeAllEncoding` only unwraps one layer. Chained
+ * encodings (e.g. base64 of hex-escaped content) require repeated passes.
+ * This function loops until the text stops changing or `maxIterations` is
+ * reached, whichever comes first.
+ *
+ * Safety guards:
+ * - Hard cap of `maxIterations` (default 5) to prevent CPU loops.
+ * - Aborts if the decoded text exceeds 10× the original length to prevent
+ *   decompression-bomb style amplification.
+ *
+ * @param text - Text to decode
+ * @param maxIterations - Maximum decode passes (default 5)
+ * @returns Object with the fully decoded text and the number of levels applied
+ */
+export function decodeAllLevels(text: string, maxIterations = 5): { text: string; levels: number } {
+	if (!text) return { text, levels: 0 };
+
+	const maxLength = text.length * 10;
+	let current = text;
+	let levels = 0;
+
+	for (let i = 0; i < maxIterations; i++) {
+		const result = detectEncoding(current, { action: "decode" });
+
+		// No encoding found — stable
+		if (!result.processedText || result.processedText === current) break;
+
+		// Amplification guard
+		if (result.processedText.length > maxLength) break;
+
+		current = result.processedText;
+		levels++;
+	}
+
+	return { text: current, levels };
+}
+
+/**
+ * Check if text contains suspicious encoded content at any nesting depth.
+ *
+ * Unlike `containsSuspiciousEncoding`, this fully unwraps chained encodings
+ * before checking for suspicious keywords, so double-encoded payloads are
+ * caught even if the intermediate form looks benign.
+ *
+ * @param text - Text to check
+ * @returns Whether suspicious encoded content was found at any level
+ */
+export function containsSuspiciousEncodingDeep(text: string): boolean {
+	const { text: decoded, levels } = decodeAllLevels(text);
+	if (levels === 0) return containsSuspiciousEncoding(text);
+	return /system|ignore|instruction|assistant|bypass|override/i.test(decoded);
+}
+
+/**
  * Redact all encoded content in text
  */
 export function redactAllEncoding(text: string, replacement: string = "[ENCODED DATA DETECTED]"): string {

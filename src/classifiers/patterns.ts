@@ -551,9 +551,9 @@ export const FAST_FILTER_KEYWORDS = [
 	"\\u",
 	"&#",
 	"rot13",
-	"1gn0r3",
-	"f0rg3t",
-	"byp4ss",
+	// Note: raw leet-speak entries removed — the normalisation chain in
+	// PatternDetector.analyze converts leet to plain ASCII before the fast
+	// filter runs, so "ignore", "forget", "bypass" above cover those cases.
 	// Prompt leaking
 	"reveal",
 	"show me your",

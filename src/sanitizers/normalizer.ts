@@ -106,6 +106,35 @@ export function containsSuspiciousUnicode(text: string): boolean {
 }
 
 /**
+ * Normalize whitespace obfuscation in text.
+ *
+ * Handles two common techniques used to split keywords past regex filters:
+ *
+ * 1. Letter-by-letter spacing — sequences of 3+ single letters separated by
+ *    single spaces, e.g. "S Y S T E M" → "SYSTEM", "i g n o r e" → "ignore".
+ *    Runs of fewer than 3 letters are left untouched to avoid collapsing
+ *    legitimate short words like "I am".
+ *
+ * 2. Embedded newlines — line breaks inserted inside word runs, e.g.
+ *    "ign\nore" → "ignore". Only removed when both neighbours are alphabetic.
+ *
+ * The result is used for Tier 1 analysis only and is never returned to callers.
+ *
+ * @param text - Text to normalize
+ * @returns Text with whitespace obfuscation collapsed
+ */
+export function normalizeWhitespace(text: string): string {
+	if (!text) return text;
+
+	// Collapse letter-by-letter spacing: "S Y S T E M" → "SYSTEM"
+	// Match a run of 3+ single letters each separated by exactly one space.
+	const result = text.replace(/\b([a-zA-Z] ){2,}[a-zA-Z]\b/g, (match) => match.replace(/ /g, ""));
+
+	// Remove embedded newlines/carriage-returns inside word runs.
+	return result.replace(/([a-zA-Z])\s*[\r\n]+\s*([a-zA-Z])/g, "$1$2");
+}
+
+/**
  * Get details about suspicious Unicode in text
  *
  * @param text - Text to analyze
