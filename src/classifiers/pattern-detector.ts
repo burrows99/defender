@@ -5,10 +5,9 @@
  * Target latency: < 1-2ms per field
  */
 
-import type { PatternMatch, RiskLevel, StructuralFlag, Tier1Result } from "../types";
 import { normalizeLeetSpeak } from "../sanitizers/leet-normalizer";
-import { normalizeUnicode } from "../sanitizers/normalizer";
-import { normalizeWhitespace } from "../sanitizers/normalizer";
+import { normalizeUnicode, normalizeWhitespace } from "../sanitizers/normalizer";
+import type { PatternMatch, RiskLevel, StructuralFlag, Tier1Result } from "../types";
 import { ALL_PATTERNS, containsFilterKeywords, type PatternDefinition } from "./patterns";
 
 /**
