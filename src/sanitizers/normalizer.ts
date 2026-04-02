@@ -23,13 +23,48 @@
 export function normalizeUnicode(text: string): string {
 	if (!text) return text;
 
-	// NFKC normalization
-	let normalized = text.normalize("NFKC");
+	// NFD decomposition separates combining marks from their base characters so
+	// stripCombiningMarks can remove them before NFKC re-composes everything.
+	// Without this step NFKC would compose "i\u0300" into "ì" and the mark
+	// would be invisible to the combining-range regex.
+	let normalized = text.normalize("NFD");
+
+	// Strip Zalgo / stacked combining diacritics from the decomposed form
+	normalized = stripCombiningMarks(normalized);
+
+	// NFKC normalization (fullwidth → ASCII, math alphanumerics → ASCII, etc.)
+	normalized = normalized.normalize("NFKC");
 
 	// Additional normalization for common bypass characters
 	normalized = normalizeSpecialCharacters(normalized);
 
 	return normalized;
+}
+
+/**
+ * Strip Unicode combining marks used in Zalgo / diacritical stacking attacks.
+ *
+ * Attackers stack combining diacritics on base letters to visually obscure
+ * keywords while keeping the base character readable (e.g. "ḭ̷g̈n̅o̊r̂e̋" → "ignore").
+ * NFKC normalization removes some but not all combining marks; this function
+ * strips the residuals across all combining Unicode ranges.
+ *
+ * Ranges covered:
+ *   U+0300–U+036F  Combining Diacritical Marks
+ *   U+1AB0–U+1AFF  Combining Diacritical Marks Extended
+ *   U+1DC0–U+1DFF  Combining Diacritical Marks Supplement
+ *   U+20D0–U+20FF  Combining Diacritical Marks for Symbols
+ *   U+FE20–U+FE2F  Combining Half Marks
+ *
+ * Note: this also strips legitimate accents (é → e, ü → u). The output is
+ * used for Tier 1 analysis only and is never returned to callers.
+ *
+ * @param text - Text to strip
+ * @returns Text with combining marks removed
+ */
+export function stripCombiningMarks(text: string): string {
+	if (!text) return text;
+	return text.replace(/[\u0300-\u036F\u1AB0-\u1AFF\u1DC0-\u1DFF\u20D0-\u20FF\uFE20-\uFE2F]/g, "");
 }
 
 /**
@@ -99,6 +134,13 @@ export function containsSuspiciousUnicode(text: string): boolean {
 
 	// Check for fullwidth characters
 	if (/[\uFF00-\uFFEF]/.test(text)) {
+		return true;
+	}
+
+	// Check for Zalgo / stacked combining diacritics (3+ is suspicious)
+	const combiningCount = (text.match(/[\u0300-\u036F\u1AB0-\u1AFF\u1DC0-\u1DFF\u20D0-\u20FF\uFE20-\uFE2F]/g) ?? [])
+		.length;
+	if (combiningCount >= 3) {
 		return true;
 	}
 

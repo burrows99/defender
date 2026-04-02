@@ -5,14 +5,7 @@
  * keywords from regex-based detection (e.g. "1gn0r3" → "ignore").
  *
  * The normalized output is used for analysis only — it is never returned
- * to callers. Substitutions are intentionally conservative to avoid
- * false positives on legitimate numeric content.
- *
- * Note: digit substitutions (0→o, 1→i, etc.) will also affect legitimate
- * alphanumeric tokens like "file1" → "filei". This is acceptable because
- * the normalized text is only used for pattern matching against multi-word
- * injection phrases, making isolated single-token collisions unlikely to
- * produce false positive detections.
+ * to callers.
  */
 
 /**
@@ -21,6 +14,8 @@
  */
 const LEET_MAP: Record<string, string> = {
 	"4": "a",
+	"@": "a",
+	"8": "b",
 	"3": "e",
 	"1": "i",
 	"0": "o",
@@ -42,14 +37,14 @@ const LEET_MAP: Record<string, string> = {
 const PROTECTED_SEQUENCE = /\\x[0-9A-Fa-f]{2}|\\u[0-9A-Fa-f]{4}|\$\(|[A-Za-z0-9+/]{20,}={0,2}/g;
 
 /**
- * Apply the leet substitution map to a segment of plain text.
+ * Apply leet substitution character-by-character within a single token.
  * The `!` character is substituted for "i" only when flanked by alphanumeric
  * characters, to preserve legitimate sentence-ending punctuation.
  */
-function applyLeetMap(text: string): string {
+function applyLeetMapChars(token: string): string {
 	let result = "";
-	for (let i = 0; i < text.length; i++) {
-		const ch = text[i];
+	for (let i = 0; i < token.length; i++) {
+		const ch = token[i];
 
 		if (ch in LEET_MAP) {
 			result += LEET_MAP[ch];
@@ -57,8 +52,8 @@ function applyLeetMap(text: string): string {
 		}
 
 		if (ch === "!") {
-			const prev = i > 0 ? text[i - 1] : "";
-			const next = i < text.length - 1 ? text[i + 1] : "";
+			const prev = i > 0 ? token[i - 1] : "";
+			const next = i < token.length - 1 ? token[i + 1] : "";
 			if (/[a-zA-Z0-9]/.test(prev) && /[a-zA-Z0-9]/.test(next)) {
 				result += "i";
 				continue;
@@ -71,6 +66,28 @@ function applyLeetMap(text: string): string {
 }
 
 /**
+ * Token-aware leet substitution.
+ *
+ * Splits text into alphanumeric tokens ([@a-zA-Z0-9]+) and non-alphanumeric
+ * segments. Only tokens that contain at least one letter are normalized —
+ * this prevents pure digit sequences like "100" or "2024" from being
+ * corrupted ("100" → "ioo" under a naive approach).
+ *
+ * `@` is included in the token pattern so "@dm1n" forms a single mixed
+ * token and is correctly normalized to "admin".
+ */
+function applyLeetMapTokenAware(text: string): string {
+	// Include !, @, $ in token splitting so mixed tokens like "adm!n", "@dm1n",
+	// "$y$tem" are processed as one unit. PROTECTED_SEQUENCE has already removed
+	// $( sequences before this runs, so standalone $ safely maps to s.
+	return text.replace(/[@a-zA-Z0-9!$]+/g, (token) => {
+		// Only normalize tokens that contain at least one letter
+		if (!/[a-zA-Z]/.test(token)) return token;
+		return applyLeetMapChars(token);
+	});
+}
+
+/**
  * Normalize leet-speak substitutions in text.
  *
  * Converts digit and symbol substitutions back to their alphabetic
@@ -80,6 +97,9 @@ function applyLeetMap(text: string): string {
  * Encoding sequences (hex escapes, unicode escapes, base64 blobs) and shell
  * substitution syntax `$(` are left untouched to avoid corrupting encoding
  * detection patterns.
+ *
+ * Pure-digit tokens (e.g. "100", "2024") are left unchanged to avoid
+ * corrupting legitimate numeric content.
  *
  * @param text - Text to normalize
  * @returns Text with leet substitutions reversed
@@ -96,14 +116,14 @@ export function normalizeLeetSpeak(text: string): string {
 	let match: RegExpExecArray | null;
 	while ((match = PROTECTED_SEQUENCE.exec(text)) !== null) {
 		// Normalize the plain segment before this protected sequence
-		segments.push(applyLeetMap(text.slice(lastIndex, match.index)));
+		segments.push(applyLeetMapTokenAware(text.slice(lastIndex, match.index)));
 		// Keep the protected segment verbatim
 		segments.push(match[0]);
 		lastIndex = match.index + match[0].length;
 	}
 
 	// Normalize the remaining plain segment after the last protected sequence
-	segments.push(applyLeetMap(text.slice(lastIndex)));
+	segments.push(applyLeetMapTokenAware(text.slice(lastIndex)));
 
 	return segments.join("");
 }

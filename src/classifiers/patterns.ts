@@ -351,8 +351,22 @@ export const ENCODING_SUSPICIOUS_PATTERNS: PatternDefinition[] = [
 		id: "rot13_mention",
 		pattern: /rot13|caesar\s+cipher|decode\s+this/gi,
 		category: "encoding_suspicious",
+		severity: "medium",
+		description: "Mention of ROT13 or similar encoding schemes",
+	},
+	{
+		id: "binary_string_encoding",
+		pattern: /\b[01]{8}(?:\s+[01]{8}){2,}\b/g,
+		category: "encoding_suspicious",
+		severity: "medium",
+		description: "Binary-encoded string (potential obfuscation)",
+	},
+	{
+		id: "morse_code_encoding",
+		pattern: /(?:[.-]+\s){4,}[.-]+/g,
+		category: "encoding_suspicious",
 		severity: "low",
-		description: "Mention of simple encoding schemes",
+		description: "Morse code pattern (potential obfuscation)",
 	},
 	{
 		id: "leetspeak_injection",
