@@ -130,8 +130,11 @@ export function normalizeWhitespace(text: string): string {
 	// Match a run of 3+ single letters each separated by exactly one space.
 	const result = text.replace(/\b([a-zA-Z] ){2,}[a-zA-Z]\b/g, (match) => match.replace(/ /g, ""));
 
-	// Remove embedded newlines/carriage-returns inside word runs.
-	return result.replace(/([a-zA-Z])\s*[\r\n]+\s*([a-zA-Z])/g, "$1$2");
+	// Remove embedded newlines/carriage-returns between immediately adjacent letters.
+	// \s* is intentionally omitted: consuming surrounding spaces would silently destroy
+	// word-boundary separators (e.g. "ignore\n previous" → "ignoreprevious"), which
+	// breaks multi-word pattern matching rather than fixing obfuscation.
+	return result.replace(/([a-zA-Z])[\r\n]+([a-zA-Z])/g, "$1$2");
 }
 
 /**

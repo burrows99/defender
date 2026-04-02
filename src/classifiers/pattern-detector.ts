@@ -103,7 +103,11 @@ export class PatternDetector {
 
 		// Run patterns on normalised text — catches injection patterns hidden behind
 		// leet-speak, whitespace, or homoglyph obfuscation.
-		const normMatches = normHasKeywords ? this.detectPatterns(analysisText) : [];
+		// Matches are tagged normalised:true because their position/matched values
+		// reference the transformed text, not the caller's original input string.
+		const normMatches = normHasKeywords
+			? this.detectPatterns(analysisText).map((m) => ({ ...m, normalised: true }))
+			: [];
 
 		// Merge: normalised matches take priority. Raw-only matches are appended for
 		// patterns that fired on the original text but not the normalised form

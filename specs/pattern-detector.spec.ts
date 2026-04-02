@@ -311,8 +311,9 @@ describe('PatternDetector', () => {
 
       expect(result.hasDetections).toBe(true);
       // Leet normalisation converts "1gn0r3 pr3v10us 1nstruct10ns" → "ignore previous instructions"
-      // which triggers the ignore_previous injection pattern rather than the raw leet pattern.
-      expect(result.matches.some((m) => m.pattern === 'ignore_previous' || m.pattern === 'leetspeak_injection')).toBe(true);
+      // which must trigger ignore_previous. Asserting only on ignore_previous (not the raw
+      // leetspeak_injection pattern) ensures the test validates normalisation actually works.
+      expect(result.matches.some((m) => m.pattern === 'ignore_previous')).toBe(true);
     });
 
     it('should detect invisible unicode characters', () => {

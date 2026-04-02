@@ -369,7 +369,9 @@ export function decodeAllLevels(text: string, maxIterations = 5): { text: string
 export function containsSuspiciousEncodingDeep(text: string): boolean {
 	const { text: decoded, levels } = decodeAllLevels(text);
 	if (levels === 0) return containsSuspiciousEncoding(text);
-	return /system|ignore|instruction|assistant|bypass|override/i.test(decoded);
+	// Also check if the decoded result still contains encoded suspicious content
+	// (handles the case where decodeAllLevels hit maxIterations before fully unwrapping).
+	return /system|ignore|instruction|assistant|bypass|override/i.test(decoded) || containsSuspiciousEncoding(decoded);
 }
 
 /**
