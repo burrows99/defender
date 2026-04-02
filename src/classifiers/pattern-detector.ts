@@ -79,9 +79,10 @@ export class PatternDetector {
 			text.length > this.config.maxAnalysisLength ? text.slice(0, this.config.maxAnalysisLength) : text;
 
 		// Normalisation chain: collapse obfuscation before injection pattern matching.
-		// Order matters: whitespace first, then unicode homoglyphs, then leet-speak.
+		// Order matters: unicode homoglyphs first (so Cyrillic/fullwidth variants are
+		// resolved to ASCII before whitespace collapse), then whitespace, then leet-speak.
 		// The result is used for analysis only — never returned to callers.
-		const analysisText = normalizeLeetSpeak(normalizeUnicode(normalizeWhitespace(rawText)));
+		const analysisText = normalizeLeetSpeak(normalizeWhitespace(normalizeUnicode(rawText)));
 
 		// Fast filter: short-circuit if neither raw nor normalised text contains keywords.
 		// Raw text is checked to preserve detection of obfuscation patterns (e.g. invisible
@@ -95,6 +96,14 @@ export class PatternDetector {
 			// Still check structural issues even without keyword matches
 			const structuralFlags = this.detectStructuralIssues(rawText, originalLength);
 			return this.createResult([], structuralFlags, startTime);
+		}
+
+		// Optimisation: if normalisation produced no change, a single pass is sufficient.
+		// This avoids doubling detectPatterns work for every plain-text input with keywords.
+		if (rawText === analysisText) {
+			const matches = rawHasKeywords ? this.detectPatterns(rawText) : [];
+			const structuralFlags = this.detectStructuralIssues(rawText, originalLength);
+			return this.createResult(matches, structuralFlags, startTime);
 		}
 
 		// Run patterns on raw text first — catches obfuscation-specific patterns

@@ -118,6 +118,10 @@ export function containsSuspiciousUnicode(text: string): boolean {
  * 2. Embedded newlines — line breaks inserted inside word runs, e.g.
  *    "ign\nore" → "ignore". Only removed when both neighbours are alphabetic.
  *
+ * Note: this function operates on ASCII letters only ([a-zA-Z]). It must be
+ * called AFTER normalizeUnicode so that Cyrillic/fullwidth homoglyphs are
+ * already resolved to ASCII before whitespace collapse runs.
+ *
  * The result is used for Tier 1 analysis only and is never returned to callers.
  *
  * @param text - Text to normalize
