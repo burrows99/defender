@@ -7,7 +7,7 @@
  */
 
 import { createPatternDetector, type PatternDetector } from "../classifiers/pattern-detector";
-import { DEFAULT_RISKY_FIELDS, DEFAULT_TRAVERSAL_CONFIG } from "../config";
+import { DANGEROUS_KEYS, DEFAULT_RISKY_FIELDS, DEFAULT_TRAVERSAL_CONFIG } from "../config";
 import { createSanitizer, type Sanitizer } from "../sanitizers/sanitizer";
 import type {
 	CumulativeRiskTracker,
@@ -281,6 +281,11 @@ export class ToolResultSanitizer {
 		const result: Record<string, SanitizableValue> = {};
 
 		for (const [key, val] of Object.entries(obj)) {
+			if (DANGEROUS_KEYS.has(key)) {
+				const keyPath = context.path ? `${context.path}.${key}` : key;
+				(metadata.dangerousKeysRemoved ??= []).push(keyPath);
+				continue;
+			}
 			const fieldPath = context.path ? `${context.path}.${key}` : key;
 			const fieldContext = {
 				...context,
@@ -310,18 +315,27 @@ export class ToolResultSanitizer {
 		metadata: SanitizationMetadata,
 		depth: number,
 	): Record<string, SanitizableValue> {
-		const result: Record<string, SanitizableValue> = { ...obj };
+		const result: Record<string, SanitizableValue> = {};
+		const dataKeys = new Set(["data", "results", "items", "records"]);
 
-		// Find and sanitize the data array
-		const dataKeys = ["data", "results", "items", "records"];
-		for (const key of dataKeys) {
-			if (Array.isArray(obj[key])) {
-				const dataContext = {
-					...context,
-					path: `${context.path}.${key}`,
-				};
-				result[key] = this.sanitizeArray(obj[key] as SanitizableValue[], dataContext, metadata, depth + 1);
-				break;
+		for (const [key, val] of Object.entries(obj)) {
+			if (DANGEROUS_KEYS.has(key)) {
+				const keyPath = context.path ? `${context.path}.${key}` : key;
+				(metadata.dangerousKeysRemoved ??= []).push(keyPath);
+				continue;
+			}
+
+			const fieldContext = {
+				...context,
+				path: context.path ? `${context.path}.${key}` : key,
+				fieldName: key,
+			};
+
+			if (dataKeys.has(key) && Array.isArray(val)) {
+				result[key] = this.sanitizeArray(val as SanitizableValue[], fieldContext, metadata, depth + 1);
+			} else {
+				// Recurse into non-data fields so nested dangerous keys are filtered too
+				result[key] = this.sanitizeValue(val, fieldContext, metadata, depth + 1);
 			}
 		}
 
@@ -340,6 +354,11 @@ export class ToolResultSanitizer {
 		const result: Record<string, SanitizableValue> = {};
 
 		for (const [key, val] of Object.entries(obj)) {
+			if (DANGEROUS_KEYS.has(key)) {
+				const keyPath = context.path ? `${context.path}.${key}` : key;
+				(metadata.dangerousKeysRemoved ??= []).push(keyPath);
+				continue;
+			}
 			const fieldPath = context.path ? `${context.path}.${key}` : key;
 			const fieldContext = {
 				...context,
