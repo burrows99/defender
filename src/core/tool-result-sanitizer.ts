@@ -50,6 +50,8 @@ export interface ToolResultSanitizerConfig {
 		medium: number;
 		high: number;
 		patterns: number;
+		mediumFraction: number;
+		patternsFraction: number;
 	};
 }
 
@@ -66,6 +68,8 @@ export const DEFAULT_TOOL_RESULT_SANITIZER_CONFIG: ToolResultSanitizerConfig = {
 		medium: 3,
 		high: 1,
 		patterns: 3,
+		mediumFraction: 0.25,
+		patternsFraction: 0.25,
 	},
 };
 
@@ -387,6 +391,15 @@ export class ToolResultSanitizer {
 		// Determine risk level for this field
 		let riskLevel = context.riskLevel;
 
+		// Every risky string field counts toward the cumulative-risk
+		// denominator, not just ones that matched a pattern. Otherwise the
+		// fraction check becomes degenerate — matched/matched = 100% trivially
+		// passes, which defeats the fraction threshold for list responses
+		// where most items are benign.
+		if (context.cumulativeRisk) {
+			context.cumulativeRisk.totalFieldsProcessed++;
+		}
+
 		// Use Tier 1 classification if enabled
 		let tier1Patterns: string[] = [];
 		if (this.config.useTier1Classification) {
@@ -404,9 +417,18 @@ export class ToolResultSanitizer {
 					riskLevel = "medium";
 				}
 
-				// Update cumulative risk tracker
-				if (context.cumulativeRisk) {
-					this.updateCumulativeRisk(context.cumulativeRisk, riskLevel, tier1Patterns);
+				// Update cumulative risk tracker — only for real regex pattern matches,
+				// not structural-only detections (high_entropy, excessive_length, etc.).
+				// Structural anomalies fire on legitimate content like UUID-appended field
+				// values in list responses and would cause false cumulative escalations.
+				// Pass suggestedRisk rather than the field's post-escalation riskLevel so that
+				// a low-severity match doesn't inflate mediumRiskCount via the context default.
+				if (context.cumulativeRisk && classificationResult.matches.length > 0) {
+					this.updateCumulativeRisk(
+						context.cumulativeRisk,
+						classificationResult.suggestedRisk,
+						tier1Patterns,
+					);
 				}
 			}
 		}
@@ -465,16 +487,19 @@ export class ToolResultSanitizer {
 				medium: thresholds.medium,
 				high: thresholds.high,
 				patterns: thresholds.patterns,
+				mediumFraction: thresholds.mediumFraction,
+				patternsFraction: thresholds.patternsFraction,
 			},
 		};
 	}
 
 	/**
-	 * Update cumulative risk tracker
+	 * Update cumulative risk tracker. `totalFieldsProcessed` is incremented
+	 * by the caller for every risky string field — NOT here — so the
+	 * fraction checks in `shouldEscalate` have a meaningful denominator
+	 * (every field processed, not only matched ones).
 	 */
 	private updateCumulativeRisk(tracker: CumulativeRiskTracker, riskLevel: RiskLevel, patterns: string[]): void {
-		tracker.totalFieldsProcessed++;
-
 		if (riskLevel === "high" || riskLevel === "critical") {
 			tracker.highRiskCount++;
 		} else if (riskLevel === "medium") {
@@ -490,15 +515,31 @@ export class ToolResultSanitizer {
 	 * Check if cumulative risk should trigger escalation
 	 */
 	private shouldEscalate(tracker: CumulativeRiskTracker): boolean {
-		if (tracker.highRiskCount >= tracker.escalationThreshold.high) {
+		const t = tracker.escalationThreshold;
+
+		// A single high-risk field still escalates — these come from genuine high-severity
+		// regex matches (role markers, instruction overrides) that indicate real threats.
+		if (tracker.highRiskCount >= t.high) {
 			return true;
 		}
-		if (tracker.mediumRiskCount >= tracker.escalationThreshold.medium) {
+
+		// Medium-risk and pattern escalations require both an absolute minimum count
+		// AND a fraction of total processed fields. This prevents list responses with
+		// many items from escalating just because a small number of items happen to
+		// contain flagged content, while still catching concentrated fragmented attacks.
+		const total = Math.max(tracker.totalFieldsProcessed, 1);
+
+		if (tracker.mediumRiskCount >= t.medium && tracker.mediumRiskCount / total >= t.mediumFraction) {
 			return true;
 		}
-		if (tracker.suspiciousPatterns.length >= tracker.escalationThreshold.patterns) {
+
+		if (
+			tracker.suspiciousPatterns.length >= t.patterns &&
+			tracker.suspiciousPatterns.length / total >= t.patternsFraction
+		) {
 			return true;
 		}
+
 		return false;
 	}
 
