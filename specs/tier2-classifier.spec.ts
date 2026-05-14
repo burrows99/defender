@@ -106,7 +106,12 @@ describe('#Tier2Classifier', () => {
 	});
 
 	describe('.getConfig', () => {
-		it('returns the configured highRiskThreshold', () => {
+		// Since 0.7, the default model (v5) ships with calibration defaults in
+		// its classifier_config.json — Tier2Classifier auto-loads them, so the
+		// out-of-the-box highRiskThreshold reflects v5's calibrated threshold
+		// (0.64 = raw 0.8 at T=2.41). The legacy default (0.8) still applies
+		// for models without a calibration block (e.g. user-supplied paths).
+		it('returns the model calibration highRiskThreshold when present', () => {
 			// arrange
 			const classifier = createTier2Classifier();
 
@@ -114,7 +119,12 @@ describe('#Tier2Classifier', () => {
 			const actual = classifier.getConfig();
 
 			// assert
-			expect(actual.highRiskThreshold).toBe(0.8);
+			// v5's classifier_config.json ships highRiskThreshold = 0.64
+			// (math-equivalent to raw 0.8 at T=2.41). Assert the exact value so
+			// an accidentally-removed or malformed calibration block — which
+			// silently falls back to the library default 0.8 — fails this test
+			// instead of slipping through under a "any positive value" guard.
+			expect(actual.highRiskThreshold).toBeCloseTo(0.64, 2);
 		});
 
 		it('returns the configured mediumRiskThreshold', () => {
@@ -126,6 +136,26 @@ describe('#Tier2Classifier', () => {
 
 			// assert
 			expect(actual.mediumRiskThreshold).toBe(0.5);
+		});
+
+		it('user-provided highRiskThreshold overrides model defaults', () => {
+			const classifier = createTier2Classifier({ highRiskThreshold: 0.75 });
+			expect(classifier.getConfig().highRiskThreshold).toBe(0.75);
+		});
+
+		// Regression: callers building config conditionally — e.g.
+		// `{ temperatureT: settings.t ?? undefined }` — used to silently clobber
+		// the model-loaded calibration with `undefined` via the spread. The
+		// undefined then skipped OnnxClassifier's positive-finite guard, leaving
+		// the classifier at T=1 without warning.
+		it('explicit `undefined` in caller config does not clobber model defaults', () => {
+			const classifier = createTier2Classifier({
+				temperatureT: undefined,
+				highRiskThreshold: undefined,
+			});
+			const actual = classifier.getConfig();
+			expect(actual.highRiskThreshold).toBeCloseTo(0.64, 2);
+			expect(actual.temperatureT).toBeCloseTo(2.41, 2);
 		});
 	});
 });
